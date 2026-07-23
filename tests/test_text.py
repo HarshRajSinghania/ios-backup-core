@@ -86,6 +86,22 @@ class TestParseAttributedBody:
         assert msg_type == "text"
         assert "OPQTWX" not in text
 
+    def test_typedstream_no_scrape_fallback_when_unreadable(self):
+        # Incomplete stream — pytypedstream fails. We must NOT scrape printable
+        # runs (that path preferred detector soup). Callers use SQL text instead.
+        msg = b"I can do June 21"
+        soup = b'$%&,-.39=>CK"OPQTWX\\bfghijU'
+        blob = (
+            b"\x04\x0bstreamtyped\x84\x84\x08NSString\x01\x84\x01+"
+            + bytes([len(msg)])
+            + msg
+            + b"bplist00WversionYdd-result"
+            + soup
+        )
+        text, msg_type = parse_attributed_body(blob)
+        assert text == ""
+        assert msg_type == "text"
+
 
 class TestCleanMessageText:
     def test_strips_ufffc(self):

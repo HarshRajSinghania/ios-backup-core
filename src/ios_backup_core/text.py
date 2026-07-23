@@ -1,9 +1,10 @@
 """
 Attributed body parsing and message text cleanup.
 
-``attributedBody`` TypedStream blobs are deserialized with ``pytypedstream``
-when possible; bplist NSKeyedArchiver uses ``plistlib``. The printable-run
-scrape remains only as a last-resort fallback.
+``attributedBody`` TypedStream blobs are deserialized with ``pytypedstream``;
+bplist NSKeyedArchiver uses ``plistlib``. There is no printable-run /
+regex scrape of TypedStream bytes — if structured parse fails, callers fall
+back to the SQL ``text`` column.
 """
 
 import plistlib
@@ -143,8 +144,8 @@ def parse_attributed_body(data: bytes) -> tuple[str, str]:
       'text', 'location', 'payment', 'audio', 'fitness',
       'game', 'digital_touch', 'handwriting', 'system'
 
-    Prefer structured parse: bplist NSKeyedArchiver, else pytypedstream
-    TypedStream deserialization, else printable-run scrape.
+    Prefer structured parse: bplist NSKeyedArchiver, else pytypedstream.
+    On failure returns ``("", "text")`` so callers can use the SQL text column.
     """
     if not data:
         return "", "text"
@@ -215,75 +216,16 @@ def parse_attributed_body(data: bytes) -> tuple[str, str]:
         # bplist00 data that couldn't be parsed shouldn't be raw-decoded (produces garbage)
         return "", "text"
 
-    # 2. TypedStream — also check for system message clues
+    # 2. TypedStream via pytypedstream (no regex/printable-run scrape)
     try:
         raw = data.decode('utf-8', errors='replace')
-
-        # Quick system-type scan on raw text before cleaning
         for fragment, msg_type in _BALLOON_TYPE_MAP:
             if fragment in raw:
                 return "", msg_type
 
-        # Primary: real TypedStream deserializer (pytypedstream)
         archived = _parse_typedstream_pytypedstream(data)
         if archived is not None:
             return archived, "text"
-
-        # Last resort: printable-run scrape (legacy; may prefer detector junk)
-        text = raw
-        # Strip TypedStream / NSKeyedArchiver structural noise.
-        # ORDER MATTERS: remove full GUIDs and __kIM keys BEFORE $\w+ cleanup,
-        # because $\w+ would consume the first GUID segment (e.g. "$19129343")
-        # leaving an unrecognisable "-A4D6-…" fragment behind.
-        text = re.sub(r'streamtyped', '', text)              # TypedStream magic word
-        text = re.sub(r'__kIM\w+', '', text)                 # __kIMFileTransferGUIDAttributeName …
-        text = re.sub(r'at_\d+_', '', text)                  # attachment ref prefix "at_0_"
-        # Full GUIDs (with or without leading $)
-        text = re.sub(
-            r'\$?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}',
-            '', text, flags=re.IGNORECASE
-        )
-        # Partial GUIDs (tail segments left after splitting on control chars)
-        text = re.sub(
-            r'(?<![.\w])[0-9A-Fa-f]{4,}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{8,}',
-            '', text, flags=re.IGNORECASE
-        )
-        text = re.sub(r'\$\w+', '', text)                    # $classname, $classes, $top …
-        text = re.sub(r'W?(NS|CF)[A-Z][A-Za-z]*', '', text) # NSFont, CFString, WNSValue …
-        text = re.sub(r'Z?(NS|CF)\.\w+', '', text)          # NS.rangeval, ZNS.special …
-        text = re.sub(r'\b[A-Z][a-z]{3,}/', '', text)       # TypedStream class tags: Email/ DateTime/
-        text = re.sub(r'mailto:', '', text, flags=re.IGNORECASE)
-        text = re.sub(
-            r'[\d_A-Fa-f\-]+(\.fullsizerender)*\.(jpeg|jpg|heic|heif|png|gif|mov|mp4|m4a|caf|pdf|doc|docx)',
-            '', text, flags=re.IGNORECASE
-        )
-        for c in _NS_CLASS_NAMES:
-            text = text.replace(c, "")
-
-        parts = re.split(r'[\x00-\x08\x0b\x0c\x0e-\x1f]+', text)
-        candidate = ""
-        for p in parts:
-            p = p.strip().replace('\ufffc', '').replace('\ufffd', '').strip()
-            # Strip TypedStream string length-prefix artifact: '+' followed by one
-            # printable byte that encodes the declared length (e.g. "+I"=73, "+ "=32).
-            # Only strip when the declared length closely matches the remaining text.
-            m_prefix = re.match(r'^\+([\x20-\x7e])(.*)', p, re.DOTALL)
-            if m_prefix:
-                declared = ord(m_prefix.group(1))
-                remainder = m_prefix.group(2)
-                if abs(len(remainder.rstrip()) - declared) <= 3:
-                    p = remainder.lstrip()
-            # For strings containing an email address, use a regex to extract just
-            # the address and discard surrounding TypedStream noise (UEmail/, type bytes).
-            # Use lowercase-only TLD ([a-z]{2,}) so uppercase TypedStream type bytes
-            # (e.g. the 'U' in 'comUEmail') are not consumed as part of the TLD.
-            if '@' in p:
-                m_email = re.search(r'[\w._%+\-]+@[\w.\-]+\.[a-z]{2,}', p)
-                p = m_email.group(0) if m_email else ''
-            if p and len(p) > len(candidate) and len(p) > 3:
-                candidate = p
-
-        return candidate, "text"
     except Exception:
         pass
 
