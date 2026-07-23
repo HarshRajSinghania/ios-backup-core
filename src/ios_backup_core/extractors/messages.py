@@ -334,8 +334,16 @@ class MessageExtractor:
                 else:
                     msg_type = "text"
 
-                if not msg_text and has_attributed_body and msg_type == "text":
-                    msg_text, msg_type = parse_attributed_body(row["attributedBody"])
+                # Prefer structured attributedBody over the SQL text column
+                # (same strategy as imessage-exporter): TypedStream / bplist parse
+                # wins when it yields usable text; otherwise keep the text column.
+                if has_attributed_body and msg_type == "text" and row["attributedBody"]:
+                    attr_text, attr_type = parse_attributed_body(row["attributedBody"])
+                    cleaned_attr = clean_message_text(attr_text) if attr_text else ""
+                    if cleaned_attr:
+                        msg_text = attr_text
+                        if attr_type != "text":
+                            msg_type = attr_type
 
                 if msg_text:
                     msg_text = clean_message_text(msg_text)

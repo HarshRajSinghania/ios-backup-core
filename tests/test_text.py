@@ -65,6 +65,27 @@ class TestParseAttributedBody:
         assert "Héllo" in text or text == "Héllo wörld 😀"
         assert msg_type == "text"
 
+    def _typedstream_nsstring(self, message: bytes) -> bytes:
+        """Minimal valid TypedStream NSString (pytypedstream-compatible)."""
+        return (
+            b"\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84\x08NSString"
+            b"\x01\x84\x84\x08NSObject\x00\x85\x84\x01+"
+            + bytes([len(message)])
+            + message
+            + b"\x86"
+        )
+
+    def test_typedstream_pytypedstream_prefers_nsstring_over_soup(self):
+        msg = b"I can do June 21"
+        soup = b'$%&,-.39=>CK"OPQTWX\\bfghijU'
+        # Trailing detector bplist junk is longer than the real message; a
+        # printable-run heuristic would pick the soup. Structured parse must not.
+        blob = self._typedstream_nsstring(msg) + b"bplist00WversionYdd-result" + soup
+        text, msg_type = parse_attributed_body(blob)
+        assert text == "I can do June 21"
+        assert msg_type == "text"
+        assert "OPQTWX" not in text
+
 
 class TestCleanMessageText:
     def test_strips_ufffc(self):

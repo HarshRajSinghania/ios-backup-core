@@ -1,13 +1,19 @@
 """
 Attributed body parsing and message text cleanup.
 
-Extracted verbatim from messages.py. All parsing logic is battle-tested
-against real iPhone backups — do not rewrite.
+``attributedBody`` TypedStream blobs are deserialized with ``pytypedstream``
+when possible; bplist NSKeyedArchiver uses ``plistlib``. The printable-run
+scrape remains only as a last-resort fallback.
 """
 
 import plistlib
 import re
 from typing import Optional
+
+try:
+    from typedstream.stream import TypedStreamReader
+except ImportError:  # pragma: no cover
+    TypedStreamReader = None  # type: ignore[misc, assignment]
 
 # ---------------------------------------------------------------------------
 # Pre-compiled regex patterns (used both in parse_attributed_body and
@@ -100,8 +106,34 @@ def _detect_type_from_objects(objects: list) -> str:
     return "text"
 
 
+def _parse_typedstream_pytypedstream(data: bytes) -> Optional[str]:
+    """Deserialize a TypedStream blob with pytypedstream; return first NSString.
+
+    The first ``bytes`` event from ``TypedStreamReader`` is the user-visible
+    message body. Later bytes are usually attribute names (``__kIM…``).
+    """
+    if TypedStreamReader is None:
+        return None
+    try:
+        for event in TypedStreamReader.from_data(data):
+            if type(event) is not bytes:
+                continue
+            try:
+                text = event.decode("utf-8")
+            except UnicodeDecodeError:
+                text = event.decode("utf-8", "replace")
+            if not text or text.startswith("__kIM"):
+                continue
+            if text in _NS_CLASS_NAMES or re.match(r"^W?(NS|CF)[A-Z]", text):
+                continue
+            return text
+    except Exception:
+        return None
+    return None
+
+
 # ---------------------------------------------------------------------------
-# Core parsing functions — copied verbatim, do not alter logic
+# Core parsing functions
 # ---------------------------------------------------------------------------
 
 def parse_attributed_body(data: bytes) -> tuple[str, str]:
@@ -111,7 +143,8 @@ def parse_attributed_body(data: bytes) -> tuple[str, str]:
       'text', 'location', 'payment', 'audio', 'fitness',
       'game', 'digital_touch', 'handwriting', 'system'
 
-    Copied verbatim from messages.py — battle-tested against real backups.
+    Prefer structured parse: bplist NSKeyedArchiver, else pytypedstream
+    TypedStream deserialization, else printable-run scrape.
     """
     if not data:
         return "", "text"
@@ -182,7 +215,7 @@ def parse_attributed_body(data: bytes) -> tuple[str, str]:
         # bplist00 data that couldn't be parsed shouldn't be raw-decoded (produces garbage)
         return "", "text"
 
-    # 2. TypedStream / raw binary fallback — also check for system message clues
+    # 2. TypedStream — also check for system message clues
     try:
         raw = data.decode('utf-8', errors='replace')
 
@@ -191,6 +224,12 @@ def parse_attributed_body(data: bytes) -> tuple[str, str]:
             if fragment in raw:
                 return "", msg_type
 
+        # Primary: real TypedStream deserializer (pytypedstream)
+        archived = _parse_typedstream_pytypedstream(data)
+        if archived is not None:
+            return archived, "text"
+
+        # Last resort: printable-run scrape (legacy; may prefer detector junk)
         text = raw
         # Strip TypedStream / NSKeyedArchiver structural noise.
         # ORDER MATTERS: remove full GUIDs and __kIM keys BEFORE $\w+ cleanup,
