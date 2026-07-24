@@ -350,18 +350,18 @@ class MessageExtractor:
                 if msg_type == "hidden":
                     continue
 
+                # Use post-filter joins (not cache_has_attachments). Plugin-only
+                # rows like URLBalloonProvider keep their balloon type above;
+                # stale flags with no real media become "system", not "attachment".
+                real_attachments = attachments_by_msg.get(row["message_id"], [])
+
                 if not msg_text and msg_type == "text":
-                    if bool(row["cache_has_attachments"]):
-                        msg_type = "attachment"
-                    else:
-                        msg_type = "system"
+                    msg_type = "attachment" if real_attachments else "system"
                     msg_text = ""
 
                 link_preview = None
                 if msg_type == "link" and has_payload_data and row["payload_data"]:
                     link_preview = parse_link_payload(row["payload_data"]) or None
-
-                real_attachments = attachments_by_msg.get(row["message_id"], [])
 
                 messages.append({
                     "message_id": row["message_id"],
