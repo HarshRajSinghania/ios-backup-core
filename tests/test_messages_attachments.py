@@ -119,6 +119,22 @@ def _build_sms_db(path: str) -> None:
         INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, 40);
         """
     )
+    # Link balloon with URL only in attributedBody (no SQL text, no payload_data).
+    url = b"https://example.com/article"
+    conn.execute(
+        """
+        INSERT INTO message (
+            ROWID, text, date, is_from_me, handle_id,
+            cache_has_attachments, associated_message_type, item_type,
+            balloon_bundle_id, payload_data, attributedBody
+        ) VALUES (?, NULL, 5000, 0, 1, 0, 0, 0,
+                  'com.apple.messages.URLBalloonProvider', NULL, ?)
+        """,
+        (50, _typedstream_nsstring(url)),
+    )
+    conn.execute(
+        "INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, 50)"
+    )
     conn.commit()
     conn.close()
 
@@ -158,6 +174,12 @@ class TestAttachmentClassification:
         assert msg["has_attachments"] is False
         assert msg["attachments"] == []
 
+    def test_link_balloon_reads_url_from_attributed_body(self):
+        """URL balloons must not skip attributedBody just because type is link."""
+        msg = self._by_id()[50]
+        assert msg["message_type"] == "link"
+        assert msg["text"] == "https://example.com/article"
+        assert msg["link_preview"] is None  # no payload_data
 
     def test_stale_flag_without_joins_is_system(self):
         msg = self._by_id()[30]

@@ -334,14 +334,32 @@ class MessageExtractor:
                 else:
                     msg_type = "text"
 
-                # If we have an attributed body, prefer that over the sql text column.
-                # The text column is still used if a TypedStream or bplist parse fails.
-                if has_attributed_body and msg_type == "text" and row["attributedBody"]:
+                # Recover the visible body from attributedBody when needed.
+                #
+                # URLBalloonProvider rows are typed "link" above before we get
+                # here. Their SQL text is often NULL and payload_data may be
+                # missing too — the URL still lives in attributedBody. The old
+                # guard (msg_type == "text" only) skipped those blobs and left
+                # exporters with a bare "[Link]" placeholder.
+                #
+                # Rules:
+                # - Skip hidden location balloons (dropped below).
+                # - Parse when SQL text is empty, or when type is still "text"
+                #   (prefer attributedBody over a contaminated text column).
+                # - Keep balloon/item/audio types already chosen; only let the
+                #   blob change type when we are still on generic "text".
+                sql_text_empty = not (msg_text and str(msg_text).strip())
+                if (
+                    has_attributed_body
+                    and row["attributedBody"]
+                    and msg_type != "hidden"
+                    and (sql_text_empty or msg_type == "text")
+                ):
                     attr_text, attr_type = parse_attributed_body(row["attributedBody"])
                     cleaned_attr = clean_message_text(attr_text) if attr_text else ""
                     if cleaned_attr:
                         msg_text = attr_text
-                        if attr_type != "text":
+                        if msg_type == "text" and attr_type != "text":
                             msg_type = attr_type
 
                 if msg_text:
