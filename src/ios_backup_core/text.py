@@ -2,9 +2,7 @@
 Attributed body parsing and message text cleanup.
 
 ``attributedBody`` TypedStream blobs are deserialized with ``pytypedstream``;
-bplist NSKeyedArchiver uses ``plistlib``. There is no printable-run /
-regex scrape of TypedStream bytes — if structured parse fails, callers fall
-back to the SQL ``text`` column.
+bplist NSKeyedArchiver uses ``plistlib``.
 """
 
 import plistlib
@@ -17,8 +15,7 @@ except ImportError:  # pragma: no cover
     TypedStreamReader = None  # type: ignore[misc, assignment]
 
 # ---------------------------------------------------------------------------
-# Pre-compiled regex patterns (used both in parse_attributed_body and
-# clean_message_text — share a single compiled instance for performance)
+# Pre-compiled regex patterns for clean_message_text
 # ---------------------------------------------------------------------------
 _RE_KIMMSG = re.compile(r'__kIM\w+')
 _RE_UUID = re.compile(
@@ -31,7 +28,6 @@ _RE_MEDIA_FILE = re.compile(
 )
 _RE_JUNK_START = re.compile(r'^[ \n"\uFFFD\uFFFC]+')
 _RE_JUNK_END = re.compile(r'[ \n"\uFFFD\uFFFC]+$')
-_RE_APPLE_CONST = re.compile(r'^k[A-Z][A-Z0-9\-_]{10,}')
 
 # ---------------------------------------------------------------------------
 # Bundle ID → message type mapping (authoritative column check first)
@@ -108,10 +104,10 @@ def _detect_type_from_objects(objects: list) -> str:
 
 
 def _parse_typedstream_pytypedstream(data: bytes) -> Optional[str]:
-    """Deserialize a TypedStream blob with pytypedstream; return first NSString.
+    """Read a TypedStream blob with pytypedstream and return the message text.
 
-    The first ``bytes`` event from ``TypedStreamReader`` is the user-visible
-    message body. Later bytes are usually attribute names (``__kIM…``).
+    Uses the first string payload from the stream (the body). Later strings are
+    usually internal names such as ``__kIM...``, not user-visible text.
     """
     if TypedStreamReader is None:
         return None
@@ -140,12 +136,14 @@ def _parse_typedstream_pytypedstream(data: bytes) -> Optional[str]:
 def parse_attributed_body(data: bytes) -> tuple[str, str]:
     """Extract plain text and message type from an NSAttributedString BLOB.
 
+    Parsing is attempted via binary plist (NSKeyedArchiver) first, then TypedStream via
+    pytypedstream. 
+
     Returns (text, message_type) where message_type is one of:
       'text', 'location', 'payment', 'audio', 'fitness',
-      'game', 'digital_touch', 'handwriting', 'system'
-
-    Prefer structured parse: bplist NSKeyedArchiver, else pytypedstream.
-    On failure returns ``("", "text")`` so callers can use the SQL text column.
+      'game', 'digital_touch', 'handwriting', 'system'.
+      
+    If parsing fails return `("", "text")`.
     """
     if not data:
         return "", "text"
@@ -177,46 +175,12 @@ def parse_attributed_body(data: bytes) -> tuple[str, str]:
                     ns_string_val = _resolve(root_obj.get("NS.string"))
                     if isinstance(ns_string_val, str) and ns_string_val:
                         return ns_string_val, "text"
-
-            # Fallback: longest clean string in $objects (skips internal keys / class names)
-            candidate = ""
-            for obj in objects:
-                if not isinstance(obj, str):
-                    continue
-                if obj in _NS_CLASS_NAMES:
-                    continue
-                # Skip NSKeyedArchiver structural strings
-                if obj.startswith('$') or obj == '$null':
-                    continue
-                # Skip NS/CF class name strings (e.g. "NSFont", "WNSValue", "CFString")
-                if re.match(r'^W?(NS|CF)[A-Z]', obj):
-                    continue
-                # Skip GUIDs and file attachment references
-                if "kIMFileTransferGUID" in obj or "kIMMessagePart" in obj:
-                    continue
-                if re.match(
-                    r'^\$?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$',
-                    obj, re.IGNORECASE
-                ):
-                    continue
-                if re.search(
-                    r'[\d_A-Fa-f\-]+(\.fullsizerender)*\.(jpeg|jpg|heic|heif|png|gif|mov|mp4|m4a|caf|pdf|doc|docx)',
-                    obj, re.IGNORECASE
-                ):
-                    continue
-                # Skip Apple internal constant strings (e.g. "kUSD-CAD-AUD-HKD-...")
-                if _RE_APPLE_CONST.match(obj):
-                    continue
-                if len(obj) > len(candidate):
-                    candidate = obj
-            if candidate:
-                return candidate, "text"
         except Exception:
             pass
         # bplist00 data that couldn't be parsed shouldn't be raw-decoded (produces garbage)
         return "", "text"
 
-    # 2. TypedStream via pytypedstream (no regex/printable-run scrape)
+    # 2. TypedStream via pytypedstream
     try:
         raw = data.decode('utf-8', errors='replace')
         for fragment, msg_type in _BALLOON_TYPE_MAP:
@@ -286,8 +250,8 @@ def clean_message_text(text: str) -> str:
     identifiers, UUIDs, media filenames, junk characters, and TypedStream
     string-length prefix artifacts.
 
-    Extracted from the inline cleanup block in messages.py:get_messages()
-    (lines 689-724). Logic is unchanged — do not rewrite.
+    Extracted from the inline cleanup block in messages.py:get_messages().
+    Logic is unchanged — do not rewrite.
     """
     if not text:
         return text

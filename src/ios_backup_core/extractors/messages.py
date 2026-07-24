@@ -334,9 +334,8 @@ class MessageExtractor:
                 else:
                     msg_type = "text"
 
-                # Prefer structured attributedBody over the SQL text column
-                # (same strategy as imessage-exporter): TypedStream / bplist parse
-                # wins when it yields usable text; otherwise keep the text column.
+                # If we have an attributed body, prefer that over the sql text column.
+                # The text column is still used if a TypedStream or bplist parse fails.
                 if has_attributed_body and msg_type == "text" and row["attributedBody"]:
                     attr_text, attr_type = parse_attributed_body(row["attributedBody"])
                     cleaned_attr = clean_message_text(attr_text) if attr_text else ""
