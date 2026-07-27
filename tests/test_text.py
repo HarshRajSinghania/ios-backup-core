@@ -86,6 +86,13 @@ class TestParseAttributedBody:
         assert msg_type == "text"
         assert "OPQTWX" not in text
 
+    def test_typedstream_keeps_messages_starting_with_ns_or_cf_words(self):
+        # Class-name filter must not drop human text like "CFO said yes".
+        blob = self._typedstream_nsstring(b"CFO said yes")
+        text, msg_type = parse_attributed_body(blob)
+        assert text == "CFO said yes"
+        assert msg_type == "text"
+
     def test_typedstream_no_scrape_fallback_when_unreadable(self):
         # Incomplete stream — pytypedstream fails. We must NOT scrape printable
         # runs (that path preferred detector soup). Callers use SQL text instead.

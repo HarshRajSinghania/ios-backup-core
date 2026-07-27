@@ -9,10 +9,7 @@ import plistlib
 import re
 from typing import Optional
 
-try:
-    from typedstream.stream import TypedStreamReader
-except ImportError:  # pragma: no cover
-    TypedStreamReader = None  # type: ignore[misc, assignment]
+from typedstream.stream import TypedStreamReader
 
 # ---------------------------------------------------------------------------
 # Pre-compiled regex patterns for clean_message_text
@@ -109,8 +106,6 @@ def _parse_typedstream_pytypedstream(data: bytes) -> Optional[str]:
     Uses the first string payload from the stream (the body). Later strings are
     usually internal names such as ``__kIM...``, not user-visible text.
     """
-    if TypedStreamReader is None:
-        return None
     try:
         for event in TypedStreamReader.from_data(data):
             if type(event) is not bytes:
@@ -121,7 +116,11 @@ def _parse_typedstream_pytypedstream(data: bytes) -> Optional[str]:
                 text = event.decode("utf-8", "replace")
             if not text or text.startswith("__kIM"):
                 continue
-            if text in _NS_CLASS_NAMES or re.match(r"^W?(NS|CF)[A-Z]", text):
+            # Skip Objective-C class names (NSString, WNSValue, …). Require no
+            # whitespace so real messages like "CFO said yes" are kept.
+            if text in _NS_CLASS_NAMES or (
+                " " not in text and re.match(r"^W?(NS|CF)[A-Z]", text)
+            ):
                 continue
             return text
     except Exception:
