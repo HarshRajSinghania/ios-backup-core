@@ -334,8 +334,33 @@ class MessageExtractor:
                 else:
                     msg_type = "text"
 
-                if not msg_text and has_attributed_body and msg_type == "text":
-                    msg_text, msg_type = parse_attributed_body(row["attributedBody"])
+                # Recover the visible body from attributedBody when needed.
+                #
+                # URLBalloonProvider rows are typed "link" above before we get
+                # here. Their SQL text is often NULL and payload_data may be
+                # missing too — the URL still lives in attributedBody. The old
+                # guard (msg_type == "text" only) skipped those blobs and left
+                # exporters with a bare "[Link]" placeholder.
+                #
+                # Rules:
+                # - Skip hidden location balloons (dropped below).
+                # - Parse when SQL text is empty, or when type is still "text"
+                #   (prefer attributedBody over a contaminated text column).
+                # - Keep balloon/item/audio types already chosen; only let the
+                #   blob change type when we are still on generic "text".
+                sql_text_empty = not (msg_text and str(msg_text).strip())
+                if (
+                    has_attributed_body
+                    and row["attributedBody"]
+                    and msg_type != "hidden"
+                    and (sql_text_empty or msg_type == "text")
+                ):
+                    attr_text, attr_type = parse_attributed_body(row["attributedBody"])
+                    cleaned_attr = clean_message_text(attr_text) if attr_text else ""
+                    if cleaned_attr:
+                        msg_text = attr_text
+                        if msg_type == "text" and attr_type != "text":
+                            msg_type = attr_type
 
                 if msg_text:
                     msg_text = clean_message_text(msg_text)
@@ -343,18 +368,18 @@ class MessageExtractor:
                 if msg_type == "hidden":
                     continue
 
+                # Use post-filter joins (not cache_has_attachments). Plugin-only
+                # rows like URLBalloonProvider keep their balloon type above;
+                # stale flags with no real media become "system", not "attachment".
+                real_attachments = attachments_by_msg.get(row["message_id"], [])
+
                 if not msg_text and msg_type == "text":
-                    if bool(row["cache_has_attachments"]):
-                        msg_type = "attachment"
-                    else:
-                        msg_type = "system"
+                    msg_type = "attachment" if real_attachments else "system"
                     msg_text = ""
 
                 link_preview = None
                 if msg_type == "link" and has_payload_data and row["payload_data"]:
                     link_preview = parse_link_payload(row["payload_data"]) or None
-
-                real_attachments = attachments_by_msg.get(row["message_id"], [])
 
                 messages.append({
                     "message_id": row["message_id"],

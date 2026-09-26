@@ -65,6 +65,50 @@ class TestParseAttributedBody:
         assert "Héllo" in text or text == "Héllo wörld 😀"
         assert msg_type == "text"
 
+    def _typedstream_nsstring(self, message: bytes) -> bytes:
+        """Minimal valid TypedStream NSString (pytypedstream-compatible)."""
+        return (
+            b"\x04\x0bstreamtyped\x81\xe8\x03\x84\x01@\x84\x84\x84\x08NSString"
+            b"\x01\x84\x84\x08NSObject\x00\x85\x84\x01+"
+            + bytes([len(message)])
+            + message
+            + b"\x86"
+        )
+
+    def test_typedstream_pytypedstream_prefers_nsstring_over_soup(self):
+        msg = b"I can do June 21"
+        soup = b'$%&,-.39=>CK"OPQTWX\\bfghijU'
+        # Trailing detector bplist junk is longer than the real message; a
+        # printable-run heuristic would pick the soup. Structured parse must not.
+        blob = self._typedstream_nsstring(msg) + b"bplist00WversionYdd-result" + soup
+        text, msg_type = parse_attributed_body(blob)
+        assert text == "I can do June 21"
+        assert msg_type == "text"
+        assert "OPQTWX" not in text
+
+    def test_typedstream_keeps_messages_starting_with_ns_or_cf_words(self):
+        # Class-name filter must not drop human text like "CFO said yes".
+        blob = self._typedstream_nsstring(b"CFO said yes")
+        text, msg_type = parse_attributed_body(blob)
+        assert text == "CFO said yes"
+        assert msg_type == "text"
+
+    def test_typedstream_no_scrape_fallback_when_unreadable(self):
+        # Incomplete stream — pytypedstream fails. We must NOT scrape printable
+        # runs (that path preferred detector soup). Callers use SQL text instead.
+        msg = b"I can do June 21"
+        soup = b'$%&,-.39=>CK"OPQTWX\\bfghijU'
+        blob = (
+            b"\x04\x0bstreamtyped\x84\x84\x08NSString\x01\x84\x01+"
+            + bytes([len(msg)])
+            + msg
+            + b"bplist00WversionYdd-result"
+            + soup
+        )
+        text, msg_type = parse_attributed_body(blob)
+        assert text == ""
+        assert msg_type == "text"
+
 
 class TestCleanMessageText:
     def test_strips_ufffc(self):
