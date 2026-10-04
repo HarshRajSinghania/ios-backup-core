@@ -54,10 +54,25 @@ class TestParseAttributedBody:
         assert msg_type == "text"
 
     def test_location_balloon_detected(self):
-        # Embed a known location fragment to trigger type detection
+        # No readable body: fragment scan still classifies the balloon.
         raw = b"streamtypedMaps__kIMLocationShare"
         text, msg_type = parse_attributed_body(raw)
-        assert msg_type in ("location", "text")  # depends on which trigger fires
+        assert text == ""
+        assert msg_type == "location"
+
+    def test_typedstream_keeps_text_containing_balloon_fragment(self):
+        # "Maps" is a location fragment, but a real NSString body must win.
+        blob = self._typedstream_nsstring(b"Meet at Maps at 5")
+        text, msg_type = parse_attributed_body(blob)
+        assert text == "Meet at Maps at 5"
+        assert msg_type == "text"
+
+    def test_typedstream_object_replacement_falls_back_to_fragment_scan(self):
+        # Balloon rows often carry only U+FFFC. That is not useful text.
+        blob = self._typedstream_nsstring("\ufffc".encode("utf-8")) + b"Maps"
+        text, msg_type = parse_attributed_body(blob)
+        assert text == ""
+        assert msg_type == "location"
 
     def test_bplist_unicode_text(self):
         blob = _make_bplist_attributed_string("Héllo wörld 😀")
@@ -80,7 +95,7 @@ class TestParseAttributedBody:
         soup = b'$%&,-.39=>CK"OPQTWX\\bfghijU'
         # Trailing detector bplist junk is longer than the real message; a
         # printable-run heuristic would pick the soup. Structured parse must not.
-        blob = self._typedstream_nsstring(msg) + b"bplist00WversionYdd-result" + soup
+        blob = self._typedstream_nsstring(asg) + b"bplist00WversionYdd-result" + soup
         text, msg_type = parse_attributed_body(blob)
         assert text == "I can do June 21"
         assert msg_type == "text"
