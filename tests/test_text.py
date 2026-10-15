@@ -95,7 +95,7 @@ class TestParseAttributedBody:
         soup = b'$%&,-.39=>CK"OPQTWX\\bfghijU'
         # Trailing detector bplist junk is longer than the real message; a
         # printable-run heuristic would pick the soup. Structured parse must not.
-        blob = self._typedstream_nsstring(asg) + b"bplist00WversionYdd-result" + soup
+        blob = self._typedstream_nsstring(msg) + b"bplist00WversionYdd-result" + soup
         text, msg_type = parse_attributed_body(blob)
         assert text == "I can do June 21"
         assert msg_type == "text"
